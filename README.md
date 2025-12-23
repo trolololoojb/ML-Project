@@ -48,6 +48,20 @@ In particular:
 
 I've skipped running 10M or 100M experiments because these are very expensive in terms of compute.
 
+## Baseline (DQN without ReDo)
+
+ReDo is disabled by default. To run a DQN baseline, just omit the flag:
+
+```bash
+python redo_dqn.py
+```
+
+To enable ReDo, pass `--enable_redo` (or `--enable-redo` with tyro):
+
+```bash
+python redo_dqn.py --enable_redo
+```
+
 ## Implementation progress
 
 Update 1:  

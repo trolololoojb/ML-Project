@@ -169,6 +169,11 @@ def main(cfg: Config) -> None:
 
             if global_step % cfg.redo_check_interval == 0:
                 redo_samples = rb.sample(cfg.redo_bs)
+
+                # --- wichtig für BatchNorm: Messung soll NICHT die running stats verändern
+                was_training = q_network.training
+                q_network.eval()
+
                 redo_out = run_redo(
                     redo_samples.observations,
                     model=q_network,
@@ -178,8 +183,14 @@ def main(cfg: Config) -> None:
                     use_lecun_init=cfg.use_lecun_init,
                 )
 
-                q_network = redo_out["model"]
-                optimizer = redo_out["optimizer"]
+                # wieder in den ursprünglichen Modus zurück
+                if was_training:
+                    q_network.train()
+
+                # Nur bei ReDo wirklich Modell/Optimizer ersetzen
+                if cfg.enable_redo:
+                    q_network = redo_out["model"]
+                    optimizer = redo_out["optimizer"]
 
                 logs |= {
                     f"regularization/dormant_t={cfg.redo_tau}_fraction": redo_out["dormant_fraction"],
