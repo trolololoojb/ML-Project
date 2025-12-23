@@ -65,7 +65,7 @@ def _get_activation(name: str, activations: dict[str, torch.Tensor]):
 
 
 @torch.inference_mode()
-def _get_redo_masks(activations: dict[str, torch.Tensor], tau: float) -> torch.Tensor:
+def _get_redo_masks(activations: dict[str, torch.Tensor], tau: float) -> list[tuple[str, torch.Tensor]]:
     """
     Computes the ReDo mask for a given set of activations.
     The returned mask has True where neurons are dormant and False where they are active.
@@ -92,12 +92,12 @@ def _get_redo_masks(activations: dict[str, torch.Tensor], tau: float) -> torch.T
             layer_mask[normalized_score <= tau] = 1
         else:
             layer_mask[torch.isclose(normalized_score, torch.zeros_like(normalized_score))] = 1
-        masks.append(layer_mask)
+        masks.append((name, layer_mask))
     return masks
 
 
 @torch.no_grad()
-def _reset_dormant_neurons(model: QNetwork, redo_masks: torch.Tensor, use_lecun_init: bool) -> QNetwork:
+def _reset_dormant_neurons(model: QNetwork, redo_masks: list[torch.Tensor], use_lecun_init: bool) -> QNetwork:
     """Re-initializes the dormant neurons of a model."""
 
     layers = [(name, layer) for name, layer in list(model.named_modules())[1:]]
@@ -142,7 +142,7 @@ def _reset_dormant_neurons(model: QNetwork, redo_masks: torch.Tensor, use_lecun_
 
 
 @torch.no_grad()
-def _reset_adam_moments(optimizer: optim.Adam, reset_masks: dict[str, torch.Tensor]) -> optim.Adam:
+def _reset_adam_moments(optimizer: optim.Adam, reset_masks: list[torch.Tensor]) -> optim.Adam:
     """Resets the moments of the Adam optimizer for the dormant neurons."""
 
     assert isinstance(optimizer, optim.Adam), "Moment resetting currently only supported for Adam optimizer"
@@ -188,7 +188,7 @@ def run_redo(
     tau: float,
     re_initialize: bool,
     use_lecun_init: bool,
-) -> tuple[nn.Module, optim.Adam, float, int]:
+) -> dict[str, object]:
     """
     Checks the number of dormant neurons for a given model.
     If re_initialize is True, then the dormant neurons are re-initialized according to the scheme in
@@ -211,21 +211,33 @@ def run_redo(
 
     # Masks for tau=0 logging
     zero_masks = _get_redo_masks(activations, 0.0)
-    total_neurons = sum([torch.numel(mask) for mask in zero_masks])
-    zero_count = sum([torch.sum(mask) for mask in zero_masks])
-    zero_fraction = (zero_count / total_neurons) * 100
+    total_neurons = int(sum(mask.numel() for _, mask in zero_masks))
+    zero_count = int(sum(mask.sum().item() for _, mask in zero_masks))
+    zero_fraction = (zero_count / total_neurons) * 100 if total_neurons > 0 else 0.0
+    zero_layer_counts = {name: int(mask.sum().item()) for name, mask in zero_masks}
+    zero_layer_fractions = {
+        name: (mask.sum().item() / mask.numel()) * 100 if mask.numel() > 0 else 0.0
+        for name, mask in zero_masks
+    }
 
     # Calculate the masks actually used for resetting
     masks = _get_redo_masks(activations, tau)
-    dormant_count = sum([torch.sum(mask) for mask in masks])
-    dormant_fraction = (dormant_count / sum([torch.numel(mask) for mask in masks])) * 100
+    total_dormant_neurons = int(sum(mask.numel() for _, mask in masks))
+    dormant_count = int(sum(mask.sum().item() for _, mask in masks))
+    dormant_fraction = (dormant_count / total_dormant_neurons) * 100 if total_dormant_neurons > 0 else 0.0
+    dormant_layer_counts = {name: int(mask.sum().item()) for name, mask in masks}
+    dormant_layer_fractions = {
+        name: (mask.sum().item() / mask.numel()) * 100 if mask.numel() > 0 else 0.0
+        for name, mask in masks
+    }
 
     # Re-initialize the dormant neurons and reset the Adam moments
     if re_initialize:
         print("Re-initializing dormant neurons")
         print(f"Total neurons: {total_neurons} | Dormant neurons: {dormant_count} | Dormant fraction: {dormant_fraction:.2f}%")
-        model = _reset_dormant_neurons(model, masks, use_lecun_init)
-        optimizer = _reset_adam_moments(optimizer, masks)
+        mask_tensors = [mask for _, mask in masks]
+        model = _reset_dormant_neurons(model, mask_tensors, use_lecun_init)
+        optimizer = _reset_adam_moments(optimizer, mask_tensors)
 
     # Remove the hooks again
     for handle in handles:
@@ -238,4 +250,8 @@ def run_redo(
         "zero_count": zero_count,
         "dormant_fraction": dormant_fraction,
         "dormant_count": dormant_count,
+        "zero_layer_fraction": zero_layer_fractions,
+        "zero_layer_count": zero_layer_counts,
+        "dormant_layer_fraction": dormant_layer_fractions,
+        "dormant_layer_count": dormant_layer_counts,
     }

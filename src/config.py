@@ -16,6 +16,9 @@ class Config:
     wandb_entity: str | None = None
     capture_video: bool = False
     save_model: bool = False
+    log_txt: bool = True
+    log_txt_dir: str = "runs"
+    log_txt_filename: str = "metrics.txt"
 
     # Environment settings
     env_id: str = "DemonAttackNoFrameskip-v4"
@@ -42,3 +45,9 @@ class Config:
     redo_tau: float = 0.025  # 0.025 for default, else 0.1
     redo_check_interval: int = 1000
     redo_bs: int = 64
+
+    # Evaluation settings
+    eval_interval: int = 50_000
+    eval_episodes: int = 5
+    eval_seed: int = 123
+    eval_epsilon: float = 0.05

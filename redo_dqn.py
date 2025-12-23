@@ -1,8 +1,10 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/dqn/#dqn_ataripy
+import json
 import os
 import random
 import time
 from pathlib import Path
+from typing import Any
 
 import gymnasium as gym
 import numpy as np
@@ -17,6 +19,94 @@ from src.buffer import ReplayBuffer
 from src.config import Config
 from src.redo import run_redo
 from src.utils import lecun_normal_initializer, make_env, set_cuda_configuration
+
+
+def _sanitize_value(value: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        if value.numel() == 1:
+            return value.item()
+        return value.detach().cpu().tolist()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (np.floating, np.integer)):
+        return value.item()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _sanitize_value(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_value(val) for val in value]
+    return value
+
+
+class TextLogger:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = self.path.open("a", encoding="utf-8")
+
+    def log(self, metrics: dict[str, Any], step: int) -> None:
+        payload = {"step": int(step), "time": time.time()}
+        payload.update({key: _sanitize_value(val) for key, val in metrics.items()})
+        self._fh.write(json.dumps(payload, ensure_ascii=True) + "\n")
+        self._fh.flush()
+
+    def close(self) -> None:
+        self._fh.close()
+
+
+def _compute_grad_norm(parameters: list[torch.nn.Parameter]) -> float:
+    grads = [p.grad.detach() for p in parameters if p.grad is not None]
+    if not grads:
+        return 0.0
+    return torch.norm(torch.stack([g.norm(2) for g in grads]), 2).item()
+
+
+def _collect_weight_norms(model: torch.nn.Module) -> dict[str, float]:
+    norms: dict[str, float] = {}
+    for name, module in model.named_modules():
+        if isinstance(module, (torch.nn.Conv2d, torch.nn.Linear)):
+            norms[f"weights/{name}_norm"] = module.weight.data.norm(2).item()
+    return norms
+
+
+def _evaluate_policy(
+    q_network: QNetwork,
+    device: torch.device,
+    env_id: str,
+    eval_episodes: int,
+    eval_seed: int,
+    epsilon: float,
+    run_name: str,
+) -> list[float]:
+    eval_envs = gym.vector.SyncVectorEnv([make_env(env_id, eval_seed, 0, False, run_name)])
+    eval_rng = random.Random(eval_seed)
+    obs, _ = eval_envs.reset(seed=eval_seed)
+    episodic_returns: list[float] = []
+
+    was_training = q_network.training
+    q_network.eval()
+
+    with torch.no_grad():
+        while len(episodic_returns) < eval_episodes:
+            if eval_rng.random() < epsilon:
+                actions = np.array([eval_envs.single_action_space.sample() for _ in range(eval_envs.num_envs)])
+            else:
+                q_values = q_network(torch.Tensor(obs).to(device))
+                actions = torch.argmax(q_values, dim=1).cpu().numpy()
+            next_obs, _, _, _, infos = eval_envs.step(actions)
+            if "final_info" in infos:
+                for info in infos["final_info"]:
+                    if "episode" not in info:
+                        continue
+                    episodic_returns.append(float(info["episode"]["r"].item()))
+            obs = next_obs
+
+    if was_training:
+        q_network.train()
+
+    eval_envs.close()
+    return episodic_returns
 
 
 def dqn_loss(
@@ -47,6 +137,7 @@ def main(cfg: Config) -> None:
     """Main training method for ReDO DQN."""
     run_name = f"{cfg.env_id}__{cfg.exp_name}__{cfg.seed}__{int(time.time())}"
 
+    # initialize wandb
     wandb.init(
         project=cfg.wandb_project_name,
         entity=cfg.wandb_entity,
@@ -56,6 +147,11 @@ def main(cfg: Config) -> None:
         save_code=True,
         mode="online" if cfg.track else "disabled",
     )
+    txt_logger = None
+    if cfg.log_txt:
+        run_dir = Path(cfg.log_txt_dir) / run_name
+        txt_logger = TextLogger(run_dir / cfg.log_txt_filename)
+        txt_logger.log({"event": "start", "env_id": cfg.env_id, "seed": cfg.seed}, step=0)
 
     if cfg.save_model:
         evaluation_episode = 0
@@ -121,6 +217,15 @@ def main(cfg: Config) -> None:
                     continue
                 epi_return = info["episode"]["r"].item()
                 print(f"global_step={global_step}, episodic_return={epi_return}")
+                if txt_logger:
+                    txt_logger.log(
+                        {
+                            "train/episodic_return": epi_return,
+                            "train/episodic_length": info["episode"]["l"].item(),
+                            "train/epsilon": epsilon,
+                        },
+                        step=global_step,
+                    )
                 wandb.log(
                     {
                         "charts/episodic_return": epi_return,
@@ -142,7 +247,6 @@ def main(cfg: Config) -> None:
 
         # ALGO LOGIC: training.
         if global_step > cfg.learning_starts:
-            # Flag for logging
             done_update = False
             if done_update := global_step % cfg.train_frequency == 0:
                 data = rb.sample(cfg.batch_size)
@@ -159,13 +263,24 @@ def main(cfg: Config) -> None:
                 # optimize the model
                 optimizer.zero_grad()
                 loss.backward()
+                grad_norm = _compute_grad_norm(list(q_network.parameters()))
                 optimizer.step()
 
+                q_mean = old_val.mean().item()
+                q_max = old_val.max().item()
                 logs = {
-                    "losses/td_loss": loss,
-                    "losses/q_values": old_val.mean().item(),
+                    "losses/td_loss": loss.item(),
+                    "losses/q_values": q_mean,
+                    "diagnostics/q_mean": q_mean,
+                    "diagnostics/q_max": q_max,
+                    "diagnostics/epsilon": epsilon,
+                    "diagnostics/grad_norm": grad_norm,
                     "charts/SPS": int(global_step / (time.time() - start_time)),
                 }
+                logs.update(_collect_weight_norms(q_network))
+
+                if txt_logger:
+                    txt_logger.log(logs, step=global_step)
 
             if global_step % cfg.redo_check_interval == 0:
                 redo_samples = rb.sample(cfg.redo_bs)
@@ -192,19 +307,49 @@ def main(cfg: Config) -> None:
                     q_network = redo_out["model"]
                     optimizer = redo_out["optimizer"]
 
-                logs |= {
+                redo_metrics: dict[str, Any] = {
                     f"regularization/dormant_t={cfg.redo_tau}_fraction": redo_out["dormant_fraction"],
                     f"regularization/dormant_t={cfg.redo_tau}_count": redo_out["dormant_count"],
                     "regularization/dormant_t=0.0_fraction": redo_out["zero_fraction"],
                     "regularization/dormant_t=0.0_count": redo_out["zero_count"],
                 }
+                for name, value in redo_out["dormant_layer_fraction"].items():
+                    redo_metrics[f"regularization/dormant_t={cfg.redo_tau}_layer/{name}_fraction"] = value
+                for name, value in redo_out["dormant_layer_count"].items():
+                    redo_metrics[f"regularization/dormant_t={cfg.redo_tau}_layer/{name}_count"] = value
+                for name, value in redo_out["zero_layer_fraction"].items():
+                    redo_metrics[f"regularization/dormant_t=0.0_layer/{name}_fraction"] = value
+                for name, value in redo_out["zero_layer_count"].items():
+                    redo_metrics[f"regularization/dormant_t=0.0_layer/{name}_count"] = value
+
+                if txt_logger:
+                    txt_logger.log(redo_metrics, step=global_step)
+                wandb.log(redo_metrics, step=global_step)
+
+            if cfg.eval_interval > 0 and global_step % cfg.eval_interval == 0:
+                eval_returns = _evaluate_policy(
+                    q_network=q_network,
+                    device=device,
+                    env_id=cfg.env_id,
+                    eval_episodes=cfg.eval_episodes,
+                    eval_seed=cfg.eval_seed,
+                    epsilon=cfg.eval_epsilon,
+                    run_name=f"{run_name}-eval",
+                )
+                eval_mean = float(np.mean(eval_returns)) if eval_returns else 0.0
+                eval_std = float(np.std(eval_returns)) if eval_returns else 0.0
+                eval_metrics = {
+                    "eval/episodic_return_mean": eval_mean,
+                    "eval/episodic_return_std": eval_std,
+                    "eval/episodic_returns": eval_returns,
+                }
+                if txt_logger:
+                    txt_logger.log(eval_metrics, step=global_step)
+                wandb.log(eval_metrics, step=global_step)
 
             if global_step % 100 == 0 and done_update:
                 print("SPS:", int(global_step / (time.time() - start_time)))
-                wandb.log(
-                    logs,
-                    step=global_step,
-                )
+                wandb.log(logs, step=global_step)
 
             # update target network
             if global_step % cfg.target_network_frequency == 0:
@@ -234,6 +379,10 @@ def main(cfg: Config) -> None:
         for episodic_return in episodic_returns:
             wandb.log({"evaluation_episode": evaluation_episode, "eval/episodic_return": episodic_return})
             evaluation_episode += 1
+
+    if txt_logger:
+        txt_logger.log({"event": "end"}, step=cfg.total_timesteps)
+        txt_logger.close()
 
     envs.close()
     wandb.finish()
