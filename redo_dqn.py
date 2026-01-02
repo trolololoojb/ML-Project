@@ -3,6 +3,7 @@ import json
 import os
 import random
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import tyro
 import wandb
+from gymnasium.vector import AutoresetMode
 
 from src.agent import QNetwork, linear_schedule
 from src.buffer import ReplayBuffer
@@ -70,6 +72,28 @@ def _collect_weight_norms(model: torch.nn.Module) -> dict[str, float]:
     return norms
 
 
+def _apply_env_preset(cfg: Config) -> None:
+    if cfg.env_preset not in {"auto", "minigrid"}:
+        return
+    if not cfg.env_id.startswith("MiniGrid"):
+        return
+    defaults = Config()
+    overrides = {
+        "total_timesteps": 2_000_000,
+        "buffer_size": 100_000,
+        "batch_size": 64,
+        "learning_starts": 10_000,
+        "train_frequency": 1,
+        "target_network_frequency": 1_000,
+        "exploration_fraction": 0.2,
+        "end_e": 0.05,
+        "eval_interval": 25_000,
+    }
+    for key, value in overrides.items():
+        if getattr(cfg, key) == getattr(defaults, key):
+            setattr(cfg, key, value)
+
+
 def _evaluate_policy(
     q_network: QNetwork,
     device: torch.device,
@@ -79,10 +103,17 @@ def _evaluate_policy(
     epsilon: float,
     run_name: str,
 ) -> list[float]:
-    eval_envs = gym.vector.SyncVectorEnv([make_env(env_id, eval_seed, 0, False, run_name)])
+    eval_envs = gym.vector.SyncVectorEnv(
+        [make_env(env_id, eval_seed, 0, False, run_name)],
+        autoreset_mode=AutoresetMode.SAME_STEP,
+    )
     eval_rng = random.Random(eval_seed)
     obs, _ = eval_envs.reset(seed=eval_seed)
     episodic_returns: list[float] = []
+    episode_returns = np.zeros(eval_envs.num_envs, dtype=np.float32)
+    episode_lengths = np.zeros(eval_envs.num_envs, dtype=np.int32)
+    eval_steps = 0
+    last_print = 0
 
     was_training = q_network.training
     q_network.eval()
@@ -94,12 +125,19 @@ def _evaluate_policy(
             else:
                 q_values = q_network(torch.Tensor(obs).to(device))
                 actions = torch.argmax(q_values, dim=1).cpu().numpy()
-            next_obs, _, _, _, infos = eval_envs.step(actions)
-            if "final_info" in infos:
-                for info in infos["final_info"]:
-                    if "episode" not in info:
-                        continue
-                    episodic_returns.append(float(info["episode"]["r"].item()))
+            next_obs, rewards, terminated, truncated, infos = eval_envs.step(actions)
+            eval_steps += eval_envs.num_envs
+            episode_returns += rewards
+            episode_lengths += 1
+            if eval_steps - last_print >= 1000:
+                print(f"[eval] episodes={len(episodic_returns)}/{eval_episodes} steps={eval_steps}", flush=True)
+                last_print = eval_steps
+            dones = np.logical_or(terminated, truncated)
+            if np.any(dones):
+                for idx in np.where(dones)[0]:
+                    episodic_returns.append(float(episode_returns[idx]))
+                    episode_returns[idx] = 0.0
+                    episode_lengths[idx] = 0
             obs = next_obs
 
     if was_training:
@@ -135,7 +173,10 @@ def dqn_loss(
 
 def main(cfg: Config) -> None:
     """Main training method for ReDO DQN."""
-    run_name = f"{cfg.env_id}__{cfg.exp_name}__{cfg.seed}__{int(time.time())}"
+    _apply_env_preset(cfg)
+    start_stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_name = f"{cfg.env_id}__{cfg.exp_name}__{cfg.seed}__{start_stamp}"
+    print("[setup] initializing run", flush=True)
 
     # initialize wandb
     wandb.init(
@@ -172,11 +213,14 @@ def main(cfg: Config) -> None:
     device = set_cuda_configuration(cfg.gpu)
 
     # env setup
+    print(f"[setup] creating envs for {cfg.env_id}", flush=True)
     envs = gym.vector.SyncVectorEnv(
-        [make_env(cfg.env_id, cfg.seed + i, i, cfg.capture_video, run_name) for i in range(cfg.num_envs)]
+        [make_env(cfg.env_id, cfg.seed + i, i, cfg.capture_video, run_name) for i in range(cfg.num_envs)],
+        autoreset_mode=AutoresetMode.SAME_STEP,
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
+    print("[setup] initializing networks and replay buffer", flush=True)
     q_network = QNetwork(envs).to(device)
     if cfg.use_lecun_init:
         # Use the same initialization scheme as jax/flax
@@ -196,6 +240,7 @@ def main(cfg: Config) -> None:
     start_time = time.time()
 
     # TRY NOT TO MODIFY: start the game
+    print("[train] starting rollout loop", flush=True)
     obs, _ = envs.reset(seed=cfg.seed)
     for global_step in range(cfg.total_timesteps):
         # ALGO LOGIC: put action logic here
@@ -211,9 +256,11 @@ def main(cfg: Config) -> None:
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         if "final_info" in infos:
-            for info in infos["final_info"]:
-                # Skip the envs that are not done
-                if "episode" not in info:
+            final_infos = infos["final_info"]
+            if isinstance(final_infos, dict):
+                final_infos = [final_infos]
+            for info in final_infos:
+                if not isinstance(info, dict) or "episode" not in info:
                     continue
                 epi_return = info["episode"]["r"].item()
                 print(f"global_step={global_step}, episodic_return={epi_return}")
@@ -237,9 +284,10 @@ def main(cfg: Config) -> None:
 
         # TRY NOT TO MODIFY: save data to reply buffer; handle `final_observation`
         real_next_obs = next_obs.copy()
-        for idx, d in enumerate(truncated):
-            if d:
-                real_next_obs[idx] = infos["final_observation"][idx]
+        if "final_observation" in infos:
+            for idx, d in enumerate(truncated):
+                if d:
+                    real_next_obs[idx] = infos["final_observation"][idx]
         rb.add(obs, real_next_obs, actions, rewards, terminated, infos)
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
@@ -283,6 +331,7 @@ def main(cfg: Config) -> None:
                     txt_logger.log(logs, step=global_step)
 
             if global_step % cfg.redo_check_interval == 0:
+                print(f"[redo] check at step={global_step}", flush=True)
                 redo_samples = rb.sample(cfg.redo_bs)
 
                 # --- wichtig für BatchNorm: Messung soll NICHT die running stats verändern
@@ -327,6 +376,7 @@ def main(cfg: Config) -> None:
                 wandb.log(redo_metrics, step=global_step)
 
             if cfg.eval_interval > 0 and global_step % cfg.eval_interval == 0:
+                print(f"[eval] starting at step={global_step}", flush=True)
                 eval_returns = _evaluate_policy(
                     q_network=q_network,
                     device=device,
@@ -336,6 +386,7 @@ def main(cfg: Config) -> None:
                     epsilon=cfg.eval_epsilon,
                     run_name=f"{run_name}-eval",
                 )
+                print(f"[eval] completed at step={global_step}", flush=True)
                 eval_mean = float(np.mean(eval_returns)) if eval_returns else 0.0
                 eval_std = float(np.std(eval_returns)) if eval_returns else 0.0
                 eval_metrics = {

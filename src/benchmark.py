@@ -12,7 +12,7 @@ import tyro
 
 @dataclass
 class BenchmarkConfig:
-    env_ids: tuple[str] = ("CartPole-v1", "Acrobot-v1", "MountainCar-v0")
+    env_ids: tuple[str] = ("LunarLander-v3", "MiniGrid-Empty-5x5-v0")
     command: str = "python redo_dqn.py"
     start_seed: int = 1
     num_seeds: int = 3

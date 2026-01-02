@@ -25,7 +25,7 @@ Every $F$-th time step:
 
 ## Results
 
-These results were generated using 3 seeds on DemonAttack-v4. Note I was not using typical hyperparameters for DQN, but instead chose a hyperparameter set to exaggerate the dormant neuron phenomenon.  
+These results were generated using 3 seeds on DemonAttack-v4. The project now defaults to LunarLander and MiniGrid, so these plots are kept as historical Atari results.  
 In particular:
 
 - Updates are done every environment step instead of every 4 steps.
@@ -50,7 +50,7 @@ I've skipped running 10M or 100M experiments because these are very expensive in
 
 ## Baseline (DQN without ReDo)
 
-ReDo is disabled by default. To run a DQN baseline, just omit the flag:
+ReDo is disabled by default. To run a DQN baseline on the default LunarLander environment, just omit the flag:
 
 ```bash
 python redo_dqn.py
@@ -61,6 +61,14 @@ To enable ReDo, pass `--enable_redo` (or `--enable-redo` with tyro):
 ```bash
 python redo_dqn.py --enable_redo
 ```
+
+To run on MiniGrid instead, pass an environment ID such as:
+
+```bash
+python redo_dqn.py --env_id MiniGrid-Empty-5x5-v0
+```
+
+MiniGrid uses `FlatObsWrapper` (symbolic, vector observations). A small default preset is applied automatically for MiniGrid when `--env_preset` is left as `auto`. To disable it, pass `--env_preset none`, or to force it, pass `--env_preset minigrid`.
 
 ## Implementation progress
 

@@ -10,19 +10,20 @@ class Config:
     tags: tuple[str, ...] | str | None = None
     seed: int = 0
     torch_deterministic: bool = True
-    gpu: int | None = 0
-    track: bool = False
+    gpu: int | None = None
+    track: bool = True
     wandb_project_name: str = "ReDo"
     wandb_entity: str | None = None
     capture_video: bool = False
     save_model: bool = False
-    log_txt: bool = True
+    log_txt: bool = False
     log_txt_dir: str = "runs"
     log_txt_filename: str = "metrics.txt"
 
     # Environment settings
-    env_id: str = "DemonAttackNoFrameskip-v4"
-    total_timesteps: int = 10_000_000
+    env_id: str = "LunarLander-v3"
+    env_preset: str = "auto"
+    total_timesteps: int = 300_000
     num_envs: int = 1
 
     # DQN settings

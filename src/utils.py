@@ -5,13 +5,15 @@ import gymnasium as gym
 import torch
 import torch.nn as nn
 
-from .wrappers import (
-    ClipRewardEnv,
-    EpisodicLifeEnv,
-    FireResetEnv,
-    MaxAndSkipEnv,
-    NoopResetEnv,
-)
+from .wrappers import ClipRewardEnv, EpisodicLifeEnv, FireResetEnv, MaxAndSkipEnv, NoopResetEnv
+
+
+def _is_minigrid(env_id: str) -> bool:
+    return env_id.startswith("MiniGrid")
+
+
+def _is_atari(env_id: str) -> bool:
+    return "NoFrameskip" in env_id or env_id.startswith("ALE/")
 
 
 def make_env(env_id, seed, idx, capture_video, run_name):
@@ -21,21 +23,27 @@ def make_env(env_id, seed, idx, capture_video, run_name):
     """
 
     def thunk():
+        render_mode = "rgb_array" if capture_video and idx == 0 else None
+        env = gym.make(env_id, render_mode=render_mode) if render_mode else gym.make(env_id)
         if capture_video and idx == 0:
-            env = gym.make(env_id, render_mode="rgb_array")
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        else:
-            env = gym.make(env_id)
         env = gym.wrappers.RecordEpisodeStatistics(env)
-        env = NoopResetEnv(env, noop_max=30)
-        env = MaxAndSkipEnv(env, skip=4)
-        env = EpisodicLifeEnv(env)
-        if "FIRE" in env.unwrapped.get_action_meanings():
-            env = FireResetEnv(env)
-        env = ClipRewardEnv(env)
-        env = gym.wrappers.ResizeObservation(env, (84, 84))
-        env = gym.wrappers.GrayScaleObservation(env)
-        env = gym.wrappers.FrameStack(env, 4)
+
+        if _is_minigrid(env_id):
+            from minigrid.wrappers import FlatObsWrapper
+
+            env = FlatObsWrapper(env)
+        elif _is_atari(env_id):
+            env = NoopResetEnv(env, noop_max=30)
+            env = MaxAndSkipEnv(env, skip=4)
+            env = EpisodicLifeEnv(env)
+            if "FIRE" in env.unwrapped.get_action_meanings():
+                env = FireResetEnv(env)
+            env = ClipRewardEnv(env)
+            env = gym.wrappers.ResizeObservation(env, (84, 84))
+            env = gym.wrappers.GrayScaleObservation(env)
+            env = gym.wrappers.FrameStack(env, 4)
+
         env.action_space.seed(seed)
 
         return env
