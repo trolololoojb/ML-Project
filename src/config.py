@@ -23,7 +23,7 @@ class Config:
     # Environment settings
     env_id: str = "LunarLander-v3"
     env_preset: str = "auto"
-    total_timesteps: int = 300_000
+    total_timesteps: int = 1_000_000 # total timesteps to train for
     num_envs: int = 1
 
     # DQN settings
