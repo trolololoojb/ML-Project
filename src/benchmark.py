@@ -15,8 +15,8 @@ class BenchmarkConfig:
     env_ids: tuple[str] = ("LunarLander-v3", "MiniGrid-Empty-5x5-v0")
     command: str = "python redo_dqn.py"
     start_seed: int = 1
-    num_seeds: int = 3
-    workers: int = 3
+    num_seeds: int = 5
+    workers: int = 0 # Number of parallel workers to use; set to 0 to only print commands
 
 
 def run_experiment(command: str):
