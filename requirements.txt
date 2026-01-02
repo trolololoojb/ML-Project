@@ -37,3 +37,6 @@ moviepy
 matplotlib
 pyyaml
 requests
+
+pygame
+minigrid

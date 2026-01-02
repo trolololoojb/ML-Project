@@ -23,6 +23,8 @@ def make_env(env_id, seed, idx, capture_video, run_name):
     """
 
     def thunk():
+        if _is_minigrid(env_id):
+            import minigrid  # noqa: F401
         render_mode = "rgb_array" if capture_video and idx == 0 else None
         env = gym.make(env_id, render_mode=render_mode) if render_mode else gym.make(env_id)
         if capture_video and idx == 0:

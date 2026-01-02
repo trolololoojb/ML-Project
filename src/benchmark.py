@@ -16,7 +16,7 @@ class BenchmarkConfig:
     command: str = "python redo_dqn.py"
     start_seed: int = 1
     num_seeds: int = 5
-    workers: int = 0 # Number of parallel workers to use; set to 0 to only print commands
+    workers: int = 1 # Number of parallel workers to use; set to 0 to only print commands
 
 
 def run_experiment(command: str):
