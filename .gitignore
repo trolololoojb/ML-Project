@@ -21,3 +21,5 @@ develop-eggs/
 
 # large files
 data/
+/.venv
+.venv
