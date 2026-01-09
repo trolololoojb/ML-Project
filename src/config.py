@@ -23,21 +23,21 @@ class Config:
     # Environment settings
     env_id: str = "LunarLander-v3"
     env_preset: str = "auto"
-    total_timesteps: int = 1_000_000 # total timesteps to train for
+    total_timesteps: int = 1_000_000  # total timesteps to train for
     num_envs: int = 1
 
     # DQN settings
-    buffer_size: int = 1_000_000
-    batch_size: int = 32
-    learning_rate: float = 6.25 * 1e-5  # cleanRL default: 1e-4, theirs: 6.25 * 1e-5
+    buffer_size: int = 100_000
+    batch_size: int = 64
+    learning_rate: float = 1e-3
     adam_eps: float = 1.5 * 1e-4
     use_lecun_init: bool = False  # ReDO uses lecun_normal initializer, cleanRL uses the pytorch default (kaiming_uniform)
     gamma: float = 0.99
     tau: float = 1.0
-    target_network_frequency: int = 8000  # cleanRL default: 8000, 4 freq -> 8000, 1 -> 2000
+    target_network_frequency: int = 1_000
     start_e: float = 1.0
     end_e: float = 0.01
-    exploration_fraction: float = 0.10
+    exploration_fraction: float = 0.995
     learning_starts: int = 80_000  # cleanRL default: 80000, theirs 20000
     train_frequency: int = 4  # cleanRL default: 4, theirs 1
 
