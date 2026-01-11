@@ -173,6 +173,11 @@ def dqn_loss(
 def main(cfg: Config) -> None:
     """Main training method for ReDO DQN."""
     _apply_env_preset(cfg)
+    if cfg.enable_redo and cfg.use_batch_norm:
+        raise ValueError("enable_redo and use_batch_norm cannot both be True in the same run.")
+    if cfg.use_batch_norm and cfg.tau != 1.0:
+        print("[setup] overriding tau to 1.0 for BatchNorm target updates", flush=True)
+        cfg.tau = 1.0
     start_stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_name = f"{cfg.env_id}__{cfg.exp_name}__{cfg.seed}__{start_stamp}"
     print("[setup] initializing run", flush=True)
@@ -220,13 +225,24 @@ def main(cfg: Config) -> None:
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
     print("[setup] initializing networks and replay buffer", flush=True)
-    q_network = QNetwork(envs).to(device)
+    q_network = QNetwork(
+        envs,
+        use_batch_norm=cfg.use_batch_norm,
+        bn_eps=cfg.bn_eps,
+        bn_momentum=cfg.bn_momentum,
+    ).to(device)
     if cfg.use_lecun_init:
         # Use the same initialization scheme as jax/flax
         q_network.apply(lecun_normal_initializer)
     optimizer = optim.Adam(q_network.parameters(), lr=cfg.learning_rate, eps=cfg.adam_eps)
-    target_network = QNetwork(envs).to(device)
+    target_network = QNetwork(
+        envs,
+        use_batch_norm=cfg.use_batch_norm,
+        bn_eps=cfg.bn_eps,
+        bn_momentum=cfg.bn_momentum,
+    ).to(device)
     target_network.load_state_dict(q_network.state_dict())
+    target_network.eval()
 
     rb = ReplayBuffer(
         cfg.buffer_size,
@@ -247,7 +263,11 @@ def main(cfg: Config) -> None:
         if random.random() < epsilon:
             actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
         else:
+            was_training = q_network.training
+            q_network.eval()
             q_values = q_network(torch.Tensor(obs).to(device))
+            if was_training:
+                q_network.train()
             actions = torch.argmax(q_values, dim=1).cpu().numpy()
 
         # TRY NOT TO MODIFY: execute the game and log data.
@@ -296,6 +316,7 @@ def main(cfg: Config) -> None:
         if global_step > cfg.learning_starts:
             done_update = False
             if done_update := global_step % cfg.train_frequency == 0:
+                q_network.train()
                 data = rb.sample(cfg.batch_size)
                 loss, old_val = dqn_loss(
                     q_network=q_network,
@@ -403,10 +424,16 @@ def main(cfg: Config) -> None:
 
             # update target network
             if global_step % cfg.target_network_frequency == 0:
-                for target_network_param, q_network_param in zip(target_network.parameters(), q_network.parameters()):
-                    target_network_param.data.copy_(
-                        cfg.tau * q_network_param.data + (1.0 - cfg.tau) * target_network_param.data
-                    )
+                if cfg.use_batch_norm:
+                    target_network.load_state_dict(q_network.state_dict())
+                    target_network.eval()
+                else:
+                    for target_network_param, q_network_param in zip(
+                        target_network.parameters(), q_network.parameters()
+                    ):
+                        target_network_param.data.copy_(
+                            cfg.tau * q_network_param.data + (1.0 - cfg.tau) * target_network_param.data
+                        )
 
     if cfg.save_model:
         model_path = Path(f"runs/{run_name}/{cfg.exp_name}")
@@ -422,6 +449,11 @@ def main(cfg: Config) -> None:
             eval_episodes=10,
             run_name=f"{run_name}-eval",
             Model=QNetwork,
+            model_kwargs={
+                "use_batch_norm": cfg.use_batch_norm,
+                "bn_eps": cfg.bn_eps,
+                "bn_momentum": cfg.bn_momentum,
+            },
             device=device,
             epsilon=0.05,
             capture_video=False,

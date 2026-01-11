@@ -17,6 +17,7 @@ def evaluate(
     eval_episodes: int,
     run_name: str,
     Model: torch.nn.Module,
+    model_kwargs: dict | None = None,
     device: torch.device = torch.device("cpu"),
     epsilon: float = 0.05,
     capture_video: bool = False,
@@ -25,7 +26,7 @@ def evaluate(
         [make_env(env_id, 0, 0, capture_video, run_name)],
         autoreset_mode=AutoresetMode.SAME_STEP,
     )
-    model = Model(envs).to(device)
+    model = Model(envs, **(model_kwargs or {})).to(device)
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 

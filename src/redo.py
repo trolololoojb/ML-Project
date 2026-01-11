@@ -64,6 +64,14 @@ def _get_activation(name: str, activations: dict[str, torch.Tensor]):
     return hook
 
 
+def _map_bn_name(name: str, is_image: bool) -> str:
+    if is_image:
+        mapping = {"bn1": "conv1", "bn2": "conv2", "bn3": "conv3"}
+    else:
+        mapping = {"bn1": "fc1", "bn2": "fc2"}
+    return mapping.get(name, name)
+
+
 @torch.inference_mode()
 def _get_redo_masks(activations: dict[str, torch.Tensor], tau: float) -> list[tuple[str, torch.Tensor]]:
     """
@@ -202,9 +210,19 @@ def run_redo(
 
     # Register hooks for all Conv2d and Linear layers to calculate activations
     handles = []
-    for name, module in model.named_modules():
-        if isinstance(module, torch.nn.Conv2d) or isinstance(module, torch.nn.Linear):
-            handles.append(module.register_forward_hook(activation_getter(name)))
+    has_batch_norm = any(isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)) for module in model.modules())
+    if has_batch_norm:
+        for name, module in model.named_modules():
+            if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
+                mapped_name = _map_bn_name(name, model.is_image)
+                handles.append(module.register_forward_hook(activation_getter(mapped_name)))
+        q_module = dict(model.named_modules()).get("q")
+        if isinstance(q_module, nn.Linear):
+            handles.append(q_module.register_forward_hook(activation_getter("q")))
+    else:
+        for name, module in model.named_modules():
+            if isinstance(module, (torch.nn.Conv2d, torch.nn.Linear)):
+                handles.append(module.register_forward_hook(activation_getter(name)))
 
     # Calculate activations
     _ = model(obs)

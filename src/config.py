@@ -47,6 +47,11 @@ class Config:
     redo_check_interval: int = 1000
     redo_bs: int = 64
 
+    # BatchNorm settings
+    use_batch_norm: bool = False
+    bn_eps: float = 1e-5
+    bn_momentum: float = 0.1
+
     # Evaluation settings
     eval_interval: int = 50_000
     eval_episodes: int = 5
