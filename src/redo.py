@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim
 
-from .agent import QNetwork
+from .agent import QNetwork, RMSNorm, RMSNorm2d
 from .buffer import ReplayBufferSamples
 
 
@@ -69,6 +69,32 @@ def _map_bn_name(name: str, is_image: bool) -> str:
         mapping = {"bn1": "conv1", "bn2": "conv2", "bn3": "conv3"}
     else:
         mapping = {"bn1": "fc1", "bn2": "fc2"}
+    return mapping.get(name, name)
+
+
+def _map_norm_name(name: str, is_image: bool) -> str:
+    if is_image:
+        mapping = {
+            "ln1": "conv1",
+            "ln2": "conv2",
+            "ln3": "conv3",
+            "gn1": "conv1",
+            "gn2": "conv2",
+            "gn3": "conv3",
+            "n1": "conv1",
+            "n2": "conv2",
+            "n3": "conv3",
+            "n4": "fc1",
+        }
+    else:
+        mapping = {
+            "ln1": "fc1",
+            "ln2": "fc2",
+            "gn1": "fc1",
+            "gn2": "fc2",
+            "n1": "fc1",
+            "n2": "fc2",
+        }
     return mapping.get(name, name)
 
 
@@ -211,10 +237,20 @@ def run_redo(
     # Register hooks for all Conv2d and Linear layers to calculate activations
     handles = []
     has_batch_norm = any(isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)) for module in model.modules())
+    norm_types = (nn.LayerNorm, nn.GroupNorm, RMSNorm, RMSNorm2d)
+    has_norm = any(isinstance(module, norm_types) for module in model.modules())
     if has_batch_norm:
         for name, module in model.named_modules():
             if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
                 mapped_name = _map_bn_name(name, model.is_image)
+                handles.append(module.register_forward_hook(activation_getter(mapped_name)))
+        q_module = dict(model.named_modules()).get("q")
+        if isinstance(q_module, nn.Linear):
+            handles.append(q_module.register_forward_hook(activation_getter("q")))
+    elif has_norm:
+        for name, module in model.named_modules():
+            if isinstance(module, norm_types):
+                mapped_name = _map_norm_name(name, model.is_image)
                 handles.append(module.register_forward_hook(activation_getter(mapped_name)))
         q_module = dict(model.named_modules()).get("q")
         if isinstance(q_module, nn.Linear):

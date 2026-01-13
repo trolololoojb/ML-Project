@@ -19,6 +19,7 @@ from gymnasium.vector import AutoresetMode
 from src.agent import QNetwork, linear_schedule
 from src.buffer import ReplayBuffer
 from src.config import Config
+from src.nap import WeightProjector
 from src.redo import run_redo
 from src.utils import lecun_normal_initializer, make_env, set_cuda_configuration
 
@@ -175,6 +176,8 @@ def main(cfg: Config) -> None:
     _apply_env_preset(cfg)
     if cfg.enable_redo and cfg.use_batch_norm:
         raise ValueError("enable_redo and use_batch_norm cannot both be True in the same run.")
+    if cfg.enable_nap and cfg.use_batch_norm:
+        raise ValueError("enable_nap and use_batch_norm cannot both be True in the same run.")
     if cfg.use_batch_norm and cfg.tau != 1.0:
         print("[setup] overriding tau to 1.0 for BatchNorm target updates", flush=True)
         cfg.tau = 1.0
@@ -230,16 +233,27 @@ def main(cfg: Config) -> None:
         use_batch_norm=cfg.use_batch_norm,
         bn_eps=cfg.bn_eps,
         bn_momentum=cfg.bn_momentum,
+        enable_nap=cfg.enable_nap,
+        nap_norm_type=cfg.nap_norm_type,
+        nap_eps=cfg.nap_eps,
+        nap_affine=cfg.nap_affine,
+        nap_remove_bias=cfg.nap_remove_bias,
     ).to(device)
     if cfg.use_lecun_init:
         # Use the same initialization scheme as jax/flax
         q_network.apply(lecun_normal_initializer)
     optimizer = optim.Adam(q_network.parameters(), lr=cfg.learning_rate, eps=cfg.adam_eps)
+    projector = WeightProjector(q_network, eps=cfg.nap_project_eps) if cfg.enable_nap else None
     target_network = QNetwork(
         envs,
         use_batch_norm=cfg.use_batch_norm,
         bn_eps=cfg.bn_eps,
         bn_momentum=cfg.bn_momentum,
+        enable_nap=cfg.enable_nap,
+        nap_norm_type=cfg.nap_norm_type,
+        nap_eps=cfg.nap_eps,
+        nap_affine=cfg.nap_affine,
+        nap_remove_bias=cfg.nap_remove_bias,
     ).to(device)
     target_network.load_state_dict(q_network.state_dict())
     target_network.eval()
@@ -333,6 +347,13 @@ def main(cfg: Config) -> None:
                 loss.backward()
                 grad_norm = _compute_grad_norm(list(q_network.parameters()))
                 optimizer.step()
+                if (
+                    cfg.enable_nap
+                    and cfg.nap_project_interval > 0
+                    and global_step % cfg.nap_project_interval == 0
+                    and projector is not None
+                ):
+                    projector.project_(q_network)
 
                 q_mean = old_val.mean().item()
                 q_max = old_val.max().item()
@@ -453,6 +474,11 @@ def main(cfg: Config) -> None:
                 "use_batch_norm": cfg.use_batch_norm,
                 "bn_eps": cfg.bn_eps,
                 "bn_momentum": cfg.bn_momentum,
+                "enable_nap": cfg.enable_nap,
+                "nap_norm_type": cfg.nap_norm_type,
+                "nap_eps": cfg.nap_eps,
+                "nap_affine": cfg.nap_affine,
+                "nap_remove_bias": cfg.nap_remove_bias,
             },
             device=device,
             epsilon=0.05,
