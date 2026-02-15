@@ -12,7 +12,7 @@ class Config:
     torch_deterministic: bool = True
     gpu: int | None = None
     track: bool = True
-    wandb_project_name: str = "ReDo"
+    wandb_project_name: str = "ML Projekt"
     wandb_entity: str | None = None
     capture_video: bool = False
     save_model: bool = False
@@ -38,7 +38,7 @@ class Config:
     start_e: float = 1.0
     end_e: float = 0.01
     exploration_fraction: float = 0.995
-    learning_starts: int = 80_000  # cleanRL default: 80000, theirs 20000
+    learning_starts: int = 20000  # cleanRL default: 80000, theirs 20000, we use 20k for better benchmarking on the 1M timesteps setting
     train_frequency: int = 4  # cleanRL default: 4, theirs 1
 
     # ReDo settings

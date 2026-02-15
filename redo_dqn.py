@@ -80,14 +80,14 @@ def _apply_env_preset(cfg: Config) -> None:
         return
     defaults = Config()
     overrides = {
-        "buffer_size": 100_000,
-        "batch_size": 64,
-        "learning_starts": 10_000,
-        "target_network_frequency": 1_000,
-        "exploration_fraction": 0.1,
-        "end_e": 0.01,
-        "learning_rate": 1e-4,
-        "eval_interval": 25_000,
+        # "buffer_size": 100_000,
+        # "batch_size": 64,
+        # "learning_starts": 10_000,
+        # "target_network_frequency": 1_000,
+        # "exploration_fraction": 0.1,
+        # "end_e": 0.01,
+        # "learning_rate": 1e-4,
+        # "eval_interval": 25_000,
     }
     for key, value in overrides.items():
         if getattr(cfg, key) == getattr(defaults, key):

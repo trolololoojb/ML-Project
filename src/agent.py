@@ -98,16 +98,24 @@ class QNetwork(nn.Module):
             hidden_size = 128
             self.fc1 = nn.Linear(obs_space.shape[0], hidden_size, bias=bias)
             self.fc2 = nn.Linear(hidden_size, hidden_size, bias=bias)
+            self.fc3 = nn.Linear(hidden_size, hidden_size, bias=bias)
+            self.fc4 = nn.Linear(hidden_size, hidden_size, bias=bias)
             if use_batch_norm:
                 self.bn1 = nn.BatchNorm1d(hidden_size, eps=bn_eps, momentum=bn_momentum)
                 self.bn2 = nn.BatchNorm1d(hidden_size, eps=bn_eps, momentum=bn_momentum)
+                self.bn3 = nn.BatchNorm1d(hidden_size, eps=bn_eps, momentum=bn_momentum)
+                self.bn4 = nn.BatchNorm1d(hidden_size, eps=bn_eps, momentum=bn_momentum)
             if enable_nap:
                 if nap_norm_type == "layer":
                     self.n1 = nn.LayerNorm(hidden_size, eps=nap_eps, elementwise_affine=nap_affine)
                     self.n2 = nn.LayerNorm(hidden_size, eps=nap_eps, elementwise_affine=nap_affine)
+                    self.n3 = nn.LayerNorm(hidden_size, eps=nap_eps, elementwise_affine=nap_affine)
+                    self.n4 = nn.LayerNorm(hidden_size, eps=nap_eps, elementwise_affine=nap_affine)
                 else:
                     self.n1 = RMSNorm(hidden_size, eps=nap_eps, affine=nap_affine)
                     self.n2 = RMSNorm(hidden_size, eps=nap_eps, affine=nap_affine)
+                    self.n3 = RMSNorm(hidden_size, eps=nap_eps, affine=nap_affine)
+                    self.n4 = RMSNorm(hidden_size, eps=nap_eps, affine=nap_affine)
             self.q = nn.Linear(hidden_size, action_dim, bias=True)
 
     def _get_conv_out(self, shape):
@@ -170,12 +178,22 @@ class QNetwork(nn.Module):
             x = self.fc2(x)
             x = self.n2(x)
             x = F.relu(x)
+            x = self.fc3(x)
+            x = self.n3(x)
+            x = F.relu(x)
+            x = self.fc4(x)
+            x = self.n4(x)
+            x = F.relu(x)
         elif self.use_batch_norm:
             x = F.relu(self.bn1(self.fc1(x)))
             x = F.relu(self.bn2(self.fc2(x)))
+            x = F.relu(self.bn3(self.fc3(x)))
+            x = F.relu(self.bn4(self.fc4(x)))
         else:
             x = F.relu(self.fc1(x))
             x = F.relu(self.fc2(x))
+            x = F.relu(self.fc3(x))
+            x = F.relu(self.fc4(x))
         return self.q(x)
 
 
