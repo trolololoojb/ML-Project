@@ -12,7 +12,7 @@ class Config:
     torch_deterministic: bool = True
     gpu: int | None = None
     track: bool = True
-    wandb_project_name: str = "ReDo"
+    wandb_project_name: str = "ML Projekt"
     wandb_entity: str | None = None
     capture_video: bool = False
     save_model: bool = False
@@ -38,7 +38,7 @@ class Config:
     start_e: float = 1.0
     end_e: float = 0.01
     exploration_fraction: float = 0.995
-    learning_starts: int = 80_000  # cleanRL default: 80000, theirs 20000
+    learning_starts: int = 20000  # cleanRL default: 80000, theirs 20000, we use 20k for better benchmarking on the 1M timesteps setting
     train_frequency: int = 4  # cleanRL default: 4, theirs 1
 
     # ReDo settings
@@ -46,6 +46,20 @@ class Config:
     redo_tau: float = 0.025  # 0.025 for default, else 0.1
     redo_check_interval: int = 1000
     redo_bs: int = 64
+
+    # BatchNorm settings
+    use_batch_norm: bool = False
+    bn_eps: float = 1e-5
+    bn_momentum: float = 0.1
+
+    # NaP (Normalize-and-Project) settings
+    enable_nap: bool = False
+    nap_norm_type: str = "layer"  # "layer" or "rms"
+    nap_eps: float = 1e-8
+    nap_affine: bool = True # If True, uses affine parameters in NaP layers
+    nap_remove_bias: bool = False # If True, removes bias terms from layers with NaP
+    nap_project_interval: int = 1
+    nap_project_eps: float = 1e-12
 
     # Evaluation settings
     eval_interval: int = 50_000
