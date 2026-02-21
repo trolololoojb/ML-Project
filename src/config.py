@@ -42,8 +42,11 @@ class Config:
     train_frequency: int = 4  # cleanRL default: 4, theirs 1
 
     # ReDo settings
-    enable_redo: bool = False
+    enable_redo: bool = True
     redo_tau: float = 0.025  # 0.025 for default, else 0.1
+    redo_tau_start: float | None = 0.05
+    redo_tau_end: float | None = 0.01
+    redo_tau_fraction: float = 1.0 # Fraction of training to anneal tau over (if redo_tau_start and redo_tau_end are set)
     redo_check_interval: int = 1000
     redo_bs: int = 64
 

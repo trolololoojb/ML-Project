@@ -94,6 +94,19 @@ def _apply_env_preset(cfg: Config) -> None:
             setattr(cfg, key, value)
 
 
+def _compute_redo_tau(cfg: Config, global_step: int) -> float:
+    if cfg.redo_tau_start is None and cfg.redo_tau_end is None:
+        return cfg.redo_tau
+    if cfg.redo_tau_start is None or cfg.redo_tau_end is None:
+        raise ValueError("redo_tau_start and redo_tau_end must either both be set or both be None.")
+
+    duration = int(cfg.redo_tau_fraction * cfg.total_timesteps)
+    if duration <= 0:
+        return cfg.redo_tau_end
+    progress = min(global_step / duration, 1.0)
+    return cfg.redo_tau_start + (cfg.redo_tau_end - cfg.redo_tau_start) * progress
+
+
 def _evaluate_policy(
     q_network: QNetwork,
     device: torch.device,
@@ -181,6 +194,8 @@ def main(cfg: Config) -> None:
     if cfg.use_batch_norm and cfg.tau != 1.0:
         print("[setup] overriding tau to 1.0 for BatchNorm target updates", flush=True)
         cfg.tau = 1.0
+    if cfg.redo_tau_fraction <= 0:
+        raise ValueError("redo_tau_fraction must be > 0.")
     start_stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_name = f"{cfg.env_id}__{cfg.exp_name}__{cfg.seed}__{start_stamp}"
     print("[setup] initializing run", flush=True)
@@ -374,6 +389,7 @@ def main(cfg: Config) -> None:
             if global_step % cfg.redo_check_interval == 0:
                 print(f"[redo] check at step={global_step}", flush=True)
                 redo_samples = rb.sample(cfg.redo_bs)
+                redo_tau = _compute_redo_tau(cfg, global_step)
 
                 # --- wichtig für BatchNorm: Messung soll NICHT die running stats verändern
                 was_training = q_network.training
@@ -383,7 +399,7 @@ def main(cfg: Config) -> None:
                     redo_samples.observations,
                     model=q_network,
                     optimizer=optimizer,
-                    tau=cfg.redo_tau,
+                    tau=redo_tau,
                     re_initialize=cfg.enable_redo,
                     use_lecun_init=cfg.use_lecun_init,
                 )
@@ -398,15 +414,16 @@ def main(cfg: Config) -> None:
                     optimizer = redo_out["optimizer"]
 
                 redo_metrics: dict[str, Any] = {
-                    f"regularization/dormant_t={cfg.redo_tau}_fraction": redo_out["dormant_fraction"],
-                    f"regularization/dormant_t={cfg.redo_tau}_count": redo_out["dormant_count"],
+                    "regularization/redo_tau": redo_tau,
+                    "regularization/dormant_fraction": redo_out["dormant_fraction"],
+                    "regularization/dormant_count": redo_out["dormant_count"],
                     "regularization/dormant_t=0.0_fraction": redo_out["zero_fraction"],
                     "regularization/dormant_t=0.0_count": redo_out["zero_count"],
                 }
                 for name, value in redo_out["dormant_layer_fraction"].items():
-                    redo_metrics[f"regularization/dormant_t={cfg.redo_tau}_layer/{name}_fraction"] = value
+                    redo_metrics[f"regularization/dormant_layer/{name}_fraction"] = value
                 for name, value in redo_out["dormant_layer_count"].items():
-                    redo_metrics[f"regularization/dormant_t={cfg.redo_tau}_layer/{name}_count"] = value
+                    redo_metrics[f"regularization/dormant_layer/{name}_count"] = value
                 for name, value in redo_out["zero_layer_fraction"].items():
                     redo_metrics[f"regularization/dormant_t=0.0_layer/{name}_fraction"] = value
                 for name, value in redo_out["zero_layer_count"].items():
